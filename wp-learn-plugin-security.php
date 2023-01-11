@@ -1,12 +1,12 @@
 <?php
 /**
  * Plugin Name:     WP Learn Plugin Security
- * Description:     Badly coded Plugin
+ * Description:     More secure Plugin
  * Author:          Jonathan Bossenger
  * Author URI:      https://jonthanbossenger.com
  * Text Domain:     wp-learn-plugin-security
  * Domain Path:     /languages
- * Version:         1.0.0
+ * Version:         2.0.0
  *
  * @package         WP_Learn_Plugin_Security
  */
@@ -51,15 +51,21 @@ function wp_learn_enqueue_script() {
 		'wp_learn-admin',
 		WPLEARN_PLUGIN_URL . 'assets/admin.js',
 		array( 'jquery' ),
-		'1.0.0',
+		'2.0.0',
 		true
 	);
 	wp_enqueue_script( 'wp_learn-admin' );
+	/**
+	 * 04 (a). Add an ajax nonce to the script
+	 * https://developer.wordpress.org/apis/security/nonces/
+	 */
+	$ajax_nonce = wp_create_nonce( 'wp_learn_ajax_nonce' );
 	wp_localize_script(
 		'wp_learn-admin',
 		'wp_learn_ajax',
 		array(
 			'ajax_url' => admin_url( 'admin-ajax.php' ),
+			'nonce'    => $ajax_nonce,
 		)
 	);
 }
@@ -73,6 +79,13 @@ function wp_learn_form_shortcode() {
 	ob_start();
 	?>
 	<form method="post">
+		<?php
+		/**
+		 * 04 (b). Add a nonce to the form
+		 * https://developer.wordpress.org/apis/security/nonces/
+		 */
+		wp_nonce_field( 'wp_learn_form_nonce_action', 'wp_learn_form_nonce_field' );
+		?>
 		<input type="hidden" name="wp_learn_form" value="submit">
 		<div>
 			<label for="email">Name</label>
@@ -100,8 +113,22 @@ function wp_learn_maybe_process_form() {
 	if (!isset($_POST['wp_learn_form'])){
 		return;
 	}
-	$name = $_POST['name'];
-	$email = $_POST['email'];
+
+	/**
+	 * 04 (b). Verify the nonce
+	 * https://developer.wordpress.org/apis/security/nonces/
+	 */
+	if ( ! isset( $_POST['wp_learn_form_nonce_field'] ) || ! wp_verify_nonce( $_POST['wp_learn_form_nonce_field'], 'wp_learn_form_nonce_action' ) ) {
+		wp_redirect( WPLEARN_ERROR_PAGE_SLUG );
+		die();
+	}
+
+	/**
+	 * 01. Sanitize the data
+	 * https://developer.wordpress.org/apis/security/sanitizing/
+	 */
+	$name = sanitize_text_field( $_POST['name'] );
+	$email = sanitize_text_field( $_POST['email'] );
 
 	global $wpdb;
 	$table_name = $wpdb->prefix . 'form_submissions';
@@ -137,6 +164,12 @@ function wp_learn_submenu() {
  */
 function wp_learn_render_admin_page(){
 	$submissions = wp_learn_get_form_submissions();
+	/**
+	 * 03. Escape the data
+	 * https://developer.wordpress.org/apis/security/escaping/
+	 * Escape the name and email values
+	 * Cast the ID to an integer
+	 */
 	?>
 	<div class="wrap" id="wp_learn_admin">
 		<h1>Admin</h1>
@@ -149,9 +182,9 @@ function wp_learn_render_admin_page(){
 			</thead>
 			<?php foreach ($submissions as $submission){ ?>
 				<tr>
-					<td><?php echo $submission->name?></td>
-					<td><?php echo $submission->email?></td>
-					<td><a class="delete-submission" data-id="<?php echo $submission->id?>" style="cursor:pointer;">Delete</a></td>
+					<td><?php echo esc_html( $submission->name ); ?></td>
+					<td><?php echo esc_html( $submission->email ); ?></td>
+					<td><a class="delete-submission" data-id="<?php echo (int) $submission->id?>" style="cursor:pointer;">Delete</a></td>
 				</tr>
 			<?php } ?>
 		</table>
@@ -179,7 +212,31 @@ function wp_learn_get_form_submissions() {
  */
 add_action( 'wp_ajax_delete_form_submission', 'wp_learn_delete_form_submission' );
 function wp_learn_delete_form_submission() {
-	$id = $_POST['id'];
+	/**
+	 * 05. Check user capabilities
+	 * https://developer.wordpress.org/apis/security/user-roles-and-capabilities/
+	 */
+	if ( ! current_user_can( 'manage_options' ) ) {
+		return wp_send_json( array( 'result' => 'Authentication error' ) );
+	}
+
+	/**
+	 * 04 (a). Verify the ajax nonce
+	 * https://developer.wordpress.org/apis/security/nonces/
+	 */
+	check_ajax_referer( 'wp_learn_ajax_nonce' );
+
+	/**
+	 * 02. Validate the incoming data
+	 * https://developer.wordpress.org/apis/security/data-validation/
+	 * Make sure that the id has been POSTed
+	 * Make sure that the id is an integer
+	 */
+	if ( ! isset( $_POST['id'] ) ) {
+		wp_send_json_error( 'Invalid ID' );
+	}
+	$id = (int) $_POST['id'];
+
 	global $wpdb;
 	$table_name = $wpdb->prefix . 'form_submissions';
 
